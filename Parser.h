@@ -13,7 +13,7 @@ private:
   Attribute attribute_;
   int lineno_;
 public:
-  Parser(Scanner& s) : scanner_{s}, AST_{} {}
+  Parser(Scanner& s) : scanner_{s}, AST_{}, lineno_{1} {}
   void parse(); // throws
   std::list<Stmt*>& syntaxTrees() {return AST_;}
 private:
@@ -25,12 +25,12 @@ private:
   Stmt *block();
   Stmt *while_stmt();
   Stmt *if_stmt();
-  Stmt *elsePart();
+  Stmt *else_part();
   Stmt *action();
   Expr *expr();
   Expr *term();
   Expr *factor();
-  Expr *bool_();
+  Expr *_bool();
   Expr *bool_term();
   Expr *bool_factor();
   Expr *cmp();
