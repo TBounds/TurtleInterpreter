@@ -1,300 +1,263 @@
-#ifndef AST_H
-#define AST_H
+#include "Parser.h"
+#include <sstream>
+#include <stdexcept>
 
-#include <string>
-#include <iostream>
-#include <vector>
-#include <iomanip>
-#include "Env.h"
-
-//
-// Abstract base class for all expressions.
-//
-class Expr {
-public:
-  virtual ~Expr() {}
-  virtual float eval(Env& env) const = 0;
-};
-
-//
-// Abstract base class for all statements.
-//
-class Stmt {
-public:
-  virtual ~Stmt() {};
-  virtual void execute(Env& env) = 0;
-};
-
-//
-// AST's expressions and statements go here.
-//
-
-class AssignStmt : public Stmt {
-protected:
-  const std::string _name;  //l-value
-  Expr *_expr; // r-value
-public:
-  AssignStmt(const std::string& n, Expr *e) : _name{n}, _expr{e} {}
-  virtual void execute(Env& env) {
-    env.put(_name, _expr->eval(env));
+void Parser::match(Token tok) {
+  if (tok != lookahead_) {
+    std::stringstream ss;
+    ss << "Unexpected token '" << tokenToString(lookahead_) << "', ";
+    ss << "Expecting '" << tokenToString(tok) << "'";
+    throw std::runtime_error(ss.str());
   }
-};
+  lookahead_ = scanner_.nextToken(attribute_, lineno_);
+}
 
-class HomeStmt : public Stmt {
-public:
-  virtual void execute(Env& env) {
-    std::cout << "H" << std::endl;
+
+void Parser::parse() {
+  lookahead_ = scanner_.nextToken(attribute_, lineno_);
+  try {
+    prog();
+  } catch(const std::exception& error) {
+    std::stringstream ss;
+    ss << lineno_ << ": " << error.what();
+    throw std::runtime_error(ss.str());
   }
-};
+}
 
-class PenUpStmt : public Stmt {
-public:
-  virtual void execute(Env& env) {
-    std::cout << "U" << std::endl;
+
+void Parser::prog() {
+  stmt_seq();
+  match(Token::EOT);
+}
+
+
+
+void Parser::stmt_seq() {
+  while (lookahead_ != Token::EOT) {
+    Stmt *s = block();
+    AST_.push_back(s);
   }
-};
+}
 
-class PenDownStmt : public Stmt {
-public:
-  virtual void execute(Env& env) {
-    std::cout << "D" << std::endl;
+
+Stmt *Parser::stmt() {
+  // Call the appropiate statement function based on the lookahead token.
+  switch(lookahead_){
+    case Token::IDENT:  match(Token::IDENT); return assign();
+    case Token::WHILE:  match(Token::WHILE); return while_stmt();
+    case Token::IF:     match(Token::IF);    return if_stmt();
+    default:                                 return action();                 
   }
-};
+}
 
-class PushStateStmt : public Stmt {
-public:
-  virtual void execute(Env& env) {
-    std::cout << "[" << std::endl;
+
+Stmt *Parser::assign() {
+  std::string name = attribute_.s;
+  match(Token::ASSIGN);
+  Expr *e = expr();
+  return new AssignStmt(name, e);
+}
+
+
+Stmt *Parser::block() {
+  
+  std::vector<Stmt*> stmtTree;
+  do{
+    Stmt *s = stmt();
+    stmtTree.push_back(s);
   }
-};
+  while( lookahead_ == Token::WHILE ||
+         lookahead_ == Token::IF ||
+         lookahead_ == Token::IDENT ||
+         lookahead_ == Token::HOME ||
+         lookahead_ == Token::PENUP ||
+         lookahead_ == Token::PENDOWN ||
+         lookahead_ == Token::FORWARD ||
+         lookahead_ == Token::LEFT ||
+         lookahead_ == Token::RIGHT ||
+         lookahead_ == Token::PUSHSTATE ||
+         lookahead_ == Token::POPSTATE);
+  return new BlockStmt(stmtTree);
+}
 
-class PopStateStmt : public Stmt {
-public:
-  virtual void execute(Env& env) {
-    std::cout << "]" << std::endl;
-  }
-};
 
-class ForwardStmt : public Stmt {
-protected:
-  Expr *_dist;
-public:
-  ForwardStmt(Expr *e) : _dist{e} {}
-  virtual void execute(Env& env) {
-    const float d = _dist->eval(env);
-    std::cout << "M " << d << std::endl;
-  }
-};
+Stmt *Parser::while_stmt() {
+  Expr *cond = _bool();
+  match(Token::DO);
+  Stmt *body = block();
+  match(Token::OD);
+  return new WhileStmt(cond, body);
+}
 
-class RightStmt : public Stmt {
-protected:
-  Expr *_angle;
-public:
-  RightStmt(Expr *e) : _angle{e} {}
-  virtual void execute(Env& env) {
-    const float a = _angle->eval(env);
-    std::cout << "R " << -a << std::endl;
-  }
-};
 
-class LeftStmt : public Stmt {
-protected:
-  Expr *_angle;
-public:
-  LeftStmt(Expr *e) : _angle{e} {}
-  virtual void execute(Env& env) {
-    const float a = _angle->eval(env);
-    std::cout << "R " << a << std::endl;
-  }
-};
-
-class VarExpr : public Expr {
-protected:
-  const std::string _name;
-public:
-  VarExpr(const std::string& n) : _name{n} {}
-  virtual float eval(Env& env) const {
-    return env.get(_name);
-  }
-};
-
-class ConstExpr : public Expr {
-protected:
-  const float _val;
-public:
-  ConstExpr(float v) : _val{v} {}
-  virtual float eval(Env& env) const {
-    return _val;
-  }
-};
-
-class UnaryExpr : public Expr {
-protected:
-  Expr *_expr;
-public:
-  UnaryExpr(Expr *e) : _expr{e} {}
-};
-
-class NegExpr : public UnaryExpr {
-public:
-  NegExpr(Expr *e) : UnaryExpr(e) {}
-  virtual float eval(Env& env) const {
-    return -_expr->eval(env);
-  }
-};
-
-class BinaryExpr : public Expr {
-protected:
-  Expr *_left, *_right;
-public:
-  BinaryExpr(Expr *l, Expr *r) : _left{l}, _right{r} {}
-};
-
-class AddExpr : public BinaryExpr {
-public:
-  AddExpr(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-  virtual float eval(Env& env) const {
-    return _left->eval(env) + _right->eval(env);
-  }
-};
-
-class SubExpr : public BinaryExpr {
-public:
-  SubExpr(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-  virtual float eval(Env& env) const {
-    return _left->eval(env) - _right->eval(env);
-  }
-};
-
-class MulExpr : public BinaryExpr {
-public:
-  MulExpr(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-  virtual float eval(Env& env) const {
-    return _left->eval(env) * _right->eval(env);
-  }
-};
-
-class DivExpr : public BinaryExpr {
-public:
-  DivExpr(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-  virtual float eval(Env& env) const {
-    return _left->eval(env) / _right->eval(env);
-  }
-};
-
-/************************************************/
-/************************************************/
-
-class BlockStmt : public Stmt{
-protected:  
-  std::vector<Stmt*> _stmts;
-public:
-  BlockStmt(const std::vector<Stmt*>&s): _stmts{s}{}
-  virtual void execute(Env& env){
-    for(int i = 0; i < (int)_stmts.size(); i++)
-      _stmts[i]->execute(env);
-  }
-};
-
-class WhileStmt : public Stmt{
-protected:
-  Expr *cond_;
-  Stmt *body_;
-public:
-  WhileStmt(Expr *c, Stmt *b) : cond_{c}, body_{b} {}
-  void execute(Env& env){
-    while (cond_->eval(env) != 0)
-      body_->execute(env);
-  }
-  ~WhileStmt() {delete cond_; delete body_;}
-};
-
-class IfStmt : public Stmt{
-protected:
-  Expr *cond_;
-  Stmt *body_;
-  Stmt *else_;
-public:
-  IfStmt(Expr *c, Stmt *b, Stmt *e) : cond_{c}, body_{b}, else_{e} {}
-  void execute(Env& env){
-    if (cond_->eval(env) != 0)
-      body_->execute(env);
-    else if(else_ != nullptr)
-      else_->execute(env);
-  }
-  ~IfStmt() {delete cond_; delete body_; delete else_;}
-};
-
-class AndBool : public BinaryExpr{
-  public:
-    AndBool(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) && _right->eval(env);
+Stmt *Parser::else_part() {
+  switch(lookahead_){
+    case Token::ELSIF:{
+      match(Token::ELSIF);  
+      Expr *cond = _bool();
+      match(Token::THEN);
+      Stmt *body = block();
+      Stmt *elsePart = else_part();
+      return new IfStmt(cond, body, elsePart); 
     }
-};
-
-class OrBool : public BinaryExpr{
-  public:
-    OrBool(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-    return _left->eval(env) || _right->eval(env);
+    case Token::ELSE:{
+      match(Token::ELSE);
+      Stmt *body = block();
+      match(Token::FI);
+      return body; 
     }
-};
-
-class NotExpr: public UnaryExpr{
-public:
- NotExpr(Expr *e):UnaryExpr(e){}
- virtual float eval(Env& env) const{
-   return(_expr->eval(env)); 
- }
-};
-
-class e_q : public BinaryExpr{
-  public:
-    e_q(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) == _right->eval(env);
+    case Token::FI:{
+      match(Token::FI);
+      return nullptr;
     }
-};
+    default:
+      throw std::runtime_error("Expecting turtle else_part statement!");
+  }
+}
 
-class n_e : public BinaryExpr{
-  public:
-    n_e(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) != _right->eval(env);
+
+Stmt *Parser::if_stmt() {
+  Expr *cond = _bool();
+  match(Token::THEN);
+  Stmt *body = block();
+  Stmt *elsePart = else_part();
+  return new IfStmt(cond, body, elsePart);
+}
+
+
+Stmt *Parser::action() {
+  switch(lookahead_) {
+    case Token::HOME:    match(Token::HOME);    return new HomeStmt();
+    case Token::PENUP:   match(Token::PENUP);   return new PenUpStmt();
+    case Token::PENDOWN: match(Token::PENDOWN); return new PenDownStmt();
+    case Token::FORWARD: match(Token::FORWARD); return new ForwardStmt(expr());
+    case Token::LEFT:    match(Token::LEFT);    return new LeftStmt(expr());
+    case Token::RIGHT:   match(Token::RIGHT);   return new RightStmt(expr());
+    case Token::PUSHSTATE: 
+      match(Token::PUSHSTATE); return new PushStateStmt();
+    case Token::POPSTATE:
+      match(Token::POPSTATE); return new PopStateStmt();
+    default:
+      throw std::runtime_error("Expecting turtle action statement!");
+  }
+}
+
+
+Expr *Parser::expr() {
+  Expr *e = term();
+  while (lookahead_ == Token::PLUS ||
+	 lookahead_ == Token::MINUS) {
+    const auto op = lookahead_;
+    match(lookahead_);
+    Expr *t = term();
+    if (op == Token::PLUS)
+      e = new AddExpr(e, t);
+    else
+      e = new SubExpr(e, t);
+  }
+  return e;
+}
+
+
+Expr *Parser::term() {
+  
+  Expr *e = factor();
+  while (lookahead_ == Token::MULT || lookahead_ == Token::DIV){
+    Token op = lookahead_;
+    match(lookahead_);
+    Expr *t = factor();
+    if (op == Token::MULT)
+      e = new MulExpr(e, t);
+    else
+      e = new DivExpr(e, t);
+  }
+  return e;
+}
+
+
+Expr *Parser::factor() {
+  
+  switch(lookahead_) {
+    case Token::PLUS:   match(Token::PLUS); return factor();
+    case Token::MINUS:  match(Token::MINUS); return new NegExpr(factor());
+    case Token::LPAREN:
+      {
+        match(Token::LPAREN);
+        Expr *e = expr();
+        match(Token::RPAREN);
+        return e;
+      }
+    case Token::IDENT:
+      {
+        const std::string name = attribute_.s;
+        match(Token::IDENT);
+        return new VarExpr(name);
+      }
+    case Token::REAL:
+      {
+        const float val = attribute_.f;
+        match(Token::REAL);
+        return new ConstExpr(val);
+      }
+    default:
+      throw std::runtime_error("Expecting factor!");
+  }
+}
+
+
+Expr *Parser::_bool() {
+  
+  Expr *e = bool_term();
+  while (lookahead_ == Token::OR){
+    match(Token::OR);
+    Expr *t = bool_term();
+  e = new OrBool(e, t);
+  }
+  
+  return e;
+}
+
+
+Expr *Parser::bool_term() {
+  Expr *e = bool_factor();
+  while(lookahead_ == Token::AND){
+    Expr *t = bool_factor();
+    e = new AndBool(e, t);
+  }
+  
+  return e;
+}
+
+
+Expr *Parser::bool_factor() {
+  switch(lookahead_){
+    case Token::NOT: {match(Token::NOT); return new NotExpr(bool_factor());}
+    case Token::LPAREN:{
+      match(Token::LPAREN);
+      Expr *e = _bool();
+      match(Token::RPAREN);
+      return e;
     }
-};
-
-class l_t : public BinaryExpr{
-  public:
-    l_t(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) < _right->eval(env);
+    default: {
+      Expr *e = cmp();
+      return e;
     }
-};
+  }
+}
 
-class g_t : public BinaryExpr{
-  public:
-    g_t(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) > _right->eval(env);
+
+Expr *Parser::cmp() {
+  
+  Expr *e = expr();
+  switch(lookahead_){
+    case Token::EQ:  {match(Token::EQ); Expr *s = expr(); return new e_q(e, s);}
+    case Token::NE:  {match(Token::NE); Expr *s = expr(); return new n_e(e, s);}
+    case Token::LT:  {match(Token::LT); Expr *s = expr(); return new l_t(e, s);}
+    case Token::GT:  {match(Token::GT); Expr *s = expr(); return new g_t(e, s);}
+    case Token::GE:  {match(Token::GE); Expr *s = expr(); return new g_e(e, s);}
+    case Token::LE:  {match(Token::LE); Expr *s = expr(); return new l_e(e, s);}
+    default:{
+      throw std::runtime_error("Error cmp().");
     }
-};
-
-class g_e : public BinaryExpr{
-  public:
-    g_e(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) >= _right->eval(env);
-    }
-};
-
-class l_e : public BinaryExpr{
-  public:
-    l_e(Expr *l, Expr *r) : BinaryExpr(l,r) {}
-    virtual float eval(Env& env) const{
-      return _left->eval(env) <= _right->eval(env);
-    }
-};
-
-#endif // AST_H
+  }
+}
